@@ -22,19 +22,23 @@
 #include <signal.h>
 #include <pthread.h>
 
-#define FPS_VIDEO		25
+#include "vpuenc.h"
+
+#define FPS_VIDEO		12
 #define FRAME_DURATION	1000000.0 / FPS_VIDEO
 #define CAP_BUFFERS		4
 #define OUT_BUFFERS		1
 
 #define CAP_MODE		0
-#define CAP_WIDTH		640
-#define CAP_HEIGHT		480
+#define CAP_WIDTH		1280
+#define CAP_HEIGHT		720
 
 static const char dev_cap[] = "/dev/video0";
 static const char dev_fb0[] = "/dev/fb0";
 static const char dev_out[] = "/dev/fb1";
 
+// static bool bEncoder = false;
+static bool bEncoder = true;
 static int xx_screen = 0;
 static int yy_screen = 0;
 static int cx_screen = 0;
@@ -44,6 +48,7 @@ static int cy_capture = 0;
 static int fd_cap = 0;
 static int fd_out = 0;
 static int fd_ipu = 0;
+static int fd_enc = 0;
 static struct ipu_task gtask;
 
 static int exitflag = 0;		// indicate exit
@@ -59,10 +64,11 @@ struct video_buffer
 static struct video_buffer buffers_cap[CAP_BUFFERS];
 static struct video_buffer buffers_out[OUT_BUFFERS];
 static struct video_buffer srcbuf;
+static struct video_buffer dstbuf;
 
 static int map_buffers()
 {
-	unsigned int i;
+	int i;
 	struct v4l2_buffer buf;
 
 	for (i = 0; i < CAP_BUFFERS; i++) {
@@ -104,6 +110,15 @@ static int map_buffers()
 	}
 
 	if(i >= CAP_BUFFERS) {
+
+		if(bEncoder) {
+			dstbuf.length = buffers_cap[0].length;
+			dstbuf.offset = buffers_cap[0].length;
+			ioctl(fd_ipu, IPU_ALLOC, &dstbuf.offset);
+			dstbuf.start = (unsigned char *) mmap (NULL, dstbuf.length,
+				PROT_READ | PROT_WRITE, MAP_SHARED, fd_ipu, dstbuf.offset);
+		}
+
 		srcbuf.length = buffers_cap[0].length;
 		srcbuf.offset = buffers_cap[0].length;
 		if(ioctl(fd_ipu, IPU_ALLOC, &srcbuf.offset) < 0) {
@@ -113,7 +128,7 @@ static int map_buffers()
 			srcbuf.start = (unsigned char *) mmap (NULL, srcbuf.length,
 				PROT_READ | PROT_WRITE, MAP_SHARED, fd_ipu, srcbuf.offset);
 
-			if(buffers_cap[i].start == MAP_FAILED) {
+			if(srcbuf.start == MAP_FAILED) {
 				ioctl(fd_ipu, IPU_FREE, &srcbuf.offset);
 				printf("ipu mmap error : '%s'\n", strerror(errno));
 				i = CAP_BUFFERS - 1;
@@ -229,6 +244,7 @@ static int display_init(const char *disp_dev)
 	gtask.input.width = cx_capture;
 	gtask.input.height = cy_capture;
 	gtask.input.format = IPU_PIX_FMT_YUYV;
+
 	gtask.output.paddr = buffers_out[0].offset;
 	gtask.output.width = cx_screen;
 	gtask.output.height = cy_screen;
@@ -240,6 +256,12 @@ static int display_init(const char *disp_dev)
 		gtask.output.format = IPU_PIX_FMT_RGB565;
 	else
 		gtask.output.format = IPU_PIX_FMT_BGRA32;
+
+	if(bEncoder) {
+		gtask.output.format = IPU_PIX_FMT_YUV420P;
+		gtask.output.width = cx_capture;
+		gtask.output.height = cy_capture;
+	}
 
 	return 0;
 }
@@ -441,9 +463,21 @@ static void frame_put(int idx_cap)
 static void frame_render(int idx_cap)
 {
 	gtask.input.paddr = srcbuf.offset;
+	if(bEncoder) {
+		gtask.output.paddr = dstbuf.offset;
+	}
 	memcpy(srcbuf.start, buffers_cap[idx_cap].start, srcbuf.length);
 	if (ioctl(fd_ipu, IPU_QUEUE_TASK, &gtask) < 0) {
 		printf("ioct IPU_QUEUE_TASK fail\n");
+	}
+
+	if(bEncoder) {
+		unsigned char *ppout;
+		int sz = enc_stream(dstbuf.offset, &ppout);
+		if(sz > 0) {
+			write(fd_enc, ppout, sz);
+		}
+		printf("enc_stream  sz = %d\n", sz);
 	}
 }
 
@@ -470,9 +504,14 @@ int main(int argc, char *argv[])
 	signal(SIGINT,  exit_signal);
 	signal(SIGPIPE, SIG_IGN);
 
+	if(enc_init(CAP_WIDTH, CAP_HEIGHT, FPS_VIDEO, VPU_V_AVC) < 0) {
+		printf("enc_init error\n");
+		return -1;
+	}
+
 	if ((fd_cap = open(cappath, O_RDWR)) < 0) {
 		printf("Unable to open [%s]\n", cappath);
-		return 1;
+		goto err;
 	}
 
 	if (setup_cap() < 0) {
@@ -481,7 +520,7 @@ int main(int argc, char *argv[])
 	}
 
 	printf("capture device setup done\n");
-	
+
 	if(display_init(dev_out) < 0) {
 		printf("display_init err\n");
 		goto err0;
@@ -505,6 +544,8 @@ int main(int argc, char *argv[])
 
 	gettimeofday(&ts, 0);
 
+	fd_enc = open("myenc.h264", O_RDWR | O_CREAT | O_TRUNC, 0666);
+
 	do {
 		idx = frame_get();
 		frame_render(idx);
@@ -517,10 +558,13 @@ int main(int argc, char *argv[])
 		} else {
 			printf("rander a frame with %.3fms\n", tus / 1000.0);
 		}
+		// printf("rander a frame with %.3fms\n", tus / 1000.0);
 
 		gettimeofday(&ts, 0);
 
 	} while(!exitflag);
+
+	close(fd_enc);
 
 	printf("Stopping stream...\n");
 
@@ -531,6 +575,12 @@ err1:
 	display_exit();
 err0:
 	close(fd_cap);
+err:
+	enc_exit();
 
 	return 0;
+}
+
+void endf()
+{
 }
