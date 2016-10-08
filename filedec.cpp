@@ -34,11 +34,13 @@ extern "C" {
 #include "vpudec.h"
 
 
-#define FPS_VIDEO		25
+#define FPS_VIDEO		12
 #define FRAME_DURATION	(1000000.0 / FPS_VIDEO)
 
 #define OUT_BUFFERS		1
 #define CSC_USE_IPU		1		// comment this to use g2d do csc
+#define DEC_WIDTH		1280
+#define DEC_HEIGHT		720
 
 static const char dev_fb0[] = "/dev/fb0";
 static const char dev_fb1[] = "/dev/fb1";
@@ -170,8 +172,8 @@ static int display_init()
 
 	gtask.priority = IPU_TASK_PRIORITY_HIGH;
 
-	gtask.input.width = 160;
-	gtask.input.height = 128;
+	gtask.input.width = DEC_WIDTH;
+	gtask.input.height = DEC_HEIGHT;
 	gtask.input.format = IPU_PIX_FMT_YUV420P;
 
 	gtask.output.width = cx_screen;
@@ -195,11 +197,11 @@ static int display_init()
 
 	gsrc.left = 0;
 	gsrc.top = 0;
-	gsrc.right = 160;
-	gsrc.bottom = 128;
-	gsrc.width = 160;
-	gsrc.height = 128;
-	gsrc.stride = 160;
+	gsrc.right = DEC_WIDTH;
+	gsrc.bottom = DEC_HEIGHT;
+	gsrc.width = DEC_WIDTH;
+	gsrc.height = DEC_HEIGHT;
+	gsrc.stride = DEC_WIDTH;
 	gsrc.format = G2D_NV12;
 
 	gdst.left = 0;
@@ -265,7 +267,7 @@ int main(int argc, char *argv[])
 	signal(SIGINT,  exit_signal);
 	signal(SIGPIPE, SIG_IGN);
 
-	if(dec_init(160, 128, VPU_V_AVC) < 0) {
+	if(dec_init(DEC_WIDTH, DEC_HEIGHT, VPU_V_AVC) < 0) {
 		printf("decodec init error\n");
 		return 0;
 	}
@@ -298,6 +300,8 @@ int main(int argc, char *argv[])
 
 			// memcpy(buffers_out[0].vaddr, pfi->pDisplayFrameBuf->pbufVirtY,
 				   // buffers_out[0].size);
+
+			printf(" dec_stream done\n");
 
 #ifdef CSC_USE_IPU
 			gtask.input.paddr = (int)pfi->pDisplayFrameBuf->pbufY;

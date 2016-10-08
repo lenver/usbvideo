@@ -12,6 +12,8 @@
 
 uvcdec
 uvcenc
+filedec
+uvcdecenc
 .*
 *.o
 *.o.*

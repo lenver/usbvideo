@@ -10,8 +10,9 @@ LDFLAGS	+= -lg2d -lfslvpuwrap -lvpu
 
 TARGET1 := uvcdec
 TARGET2 := uvcenc
+TARGET4 := uvcdecenc
 TARGET3 := filedec
-TARGET	:= $(TARGET1) $(TARGET2) $(TARGET3)
+TARGET	:= $(TARGET1) $(TARGET2) $(TARGET3) $(TARGET4)
 
 
 .PHONY:all
@@ -26,6 +27,10 @@ $(TARGET2):$(TARGET2).o vpuenc.o
 	$(STRIP) $@
 
 $(TARGET3):$(TARGET3).o vpudec.o
+	$(CC) $^ -o $@ $(LDFLAGS)
+	$(STRIP) $@
+
+$(TARGET4):$(TARGET4).o vpudec.o vpuenc.o
 	$(CC) $^ -o $@ $(LDFLAGS)
 	$(STRIP) $@
 
